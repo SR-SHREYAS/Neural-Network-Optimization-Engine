@@ -1,3 +1,4 @@
+import csv
 import sys
 from pathlib import Path
 
@@ -5,21 +6,40 @@ import torch
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SRC_DIR = PROJECT_ROOT / "src"
 
 sys.path.insert(0, str(SRC_DIR))
 
+
 from model import MLP
 from pruning import prune_model
 from finetune import fine_tune
+from profiler import (
+    count_parameters,
+    count_nonzero_parameters,
+    measure_latency,
+)
 
 
 MODEL_PATH = PROJECT_ROOT / "models" / "baseline_mlp.pth"
 DATA_DIR = PROJECT_ROOT / "data"
+RESULTS_DIR = PROJECT_ROOT / "results"
+RESULTS_PATH = RESULTS_DIR / "pruning_results.csv"
 
 BATCH_SIZE = 128
-PRUNING_LEVELS = [0.10, 0.20, 0.30, 0.40, 0.50, 0.60, 0.70]
+
+PRUNING_LEVELS = [
+    0.10,
+    0.20,
+    0.30,
+    0.40,
+    0.50,
+    0.60,
+    0.70,
+]
+
 FINE_TUNE_EPOCHS = 2
 FINE_TUNE_LEARNING_RATE = 0.0001
 
@@ -71,6 +91,33 @@ def load_model(device):
     return model
 
 
+def save_results(results):
+    RESULTS_DIR.mkdir(exist_ok=True)
+
+    fieldnames = [
+        "pruning",
+        "sparsity",
+        "accuracy",
+        "accuracy_change",
+        "total_parameters",
+        "nonzero_parameters",
+        "latency_ms",
+    ]
+
+    with open(
+        RESULTS_PATH,
+        "w",
+        newline="",
+    ) as file:
+        writer = csv.DictWriter(
+            file,
+            fieldnames=fieldnames,
+        )
+
+        writer.writeheader()
+        writer.writerows(results)
+
+
 def main():
     device = torch.device(
         "cuda" if torch.cuda.is_available() else "cpu"
@@ -114,16 +161,55 @@ def main():
         device,
     )
 
-    print(f"Baseline accuracy: {baseline_accuracy:.2f}%")
-    print()
-    print("Starting pruning sweep...")
-    print()
+    baseline_parameters = count_parameters(
+        baseline_model
+    )
 
-    results = []
+    baseline_nonzero_parameters = (
+        count_nonzero_parameters(baseline_model)
+    )
+
+    baseline_sparsity = 1 - (
+        baseline_nonzero_parameters
+        / baseline_parameters
+    )
+
+    baseline_latency = measure_latency(
+        baseline_model,
+        device,
+    )
+
+    print()
+    print("=== Baseline ===")
+    print(f"Accuracy: {baseline_accuracy:.2f}%")
+    print(f"Parameters: {baseline_parameters:,}")
+    print(
+        f"Non-zero parameters: "
+        f"{baseline_nonzero_parameters:,}"
+    )
+    print(f"Sparsity: {baseline_sparsity * 100:.2f}%")
+    print(f"Latency: {baseline_latency:.3f} ms")
+
+    results = [
+        {
+            "pruning": 0.0,
+            "sparsity": baseline_sparsity,
+            "accuracy": baseline_accuracy,
+            "accuracy_change": 0.0,
+            "total_parameters": baseline_parameters,
+            "nonzero_parameters": baseline_nonzero_parameters,
+            "latency_ms": baseline_latency,
+        }
+    ]
+
+    print()
+    print("=== Starting pruning sweep ===")
+    print()
 
     for pruning_amount in PRUNING_LEVELS:
         print(
-            f"--- Pruning {pruning_amount * 100:.0f}% ---"
+            f"--- Pruning "
+            f"{pruning_amount * 100:.0f}% ---"
         )
 
         model = load_model(device)
@@ -131,10 +217,6 @@ def main():
         prune_model(
             model,
             pruning_amount,
-        )
-
-        sparsity_before_finetuning = calculate_sparsity(
-            model
         )
 
         pruned_accuracy = evaluate(
@@ -162,10 +244,26 @@ def main():
             device,
         )
 
-        final_sparsity = calculate_sparsity(model)
+        final_sparsity = calculate_sparsity(
+            model
+        )
+
+        total_parameters = count_parameters(
+            model
+        )
+
+        nonzero_parameters = (
+            count_nonzero_parameters(model)
+        )
+
+        latency = measure_latency(
+            model,
+            device,
+        )
 
         accuracy_change = (
-            fine_tuned_accuracy - baseline_accuracy
+            fine_tuned_accuracy
+            - baseline_accuracy
         )
 
         print(
@@ -179,6 +277,16 @@ def main():
         )
 
         print(
+            f"Non-zero parameters: "
+            f"{nonzero_parameters:,}"
+        )
+
+        print(
+            f"Latency: "
+            f"{latency:.3f} ms"
+        )
+
+        print(
             f"Accuracy change: "
             f"{accuracy_change:+.2f} pp"
         )
@@ -189,6 +297,9 @@ def main():
                 "sparsity": final_sparsity,
                 "accuracy": fine_tuned_accuracy,
                 "accuracy_change": accuracy_change,
+                "total_parameters": total_parameters,
+                "nonzero_parameters": nonzero_parameters,
+                "latency_ms": latency,
             }
         )
 
@@ -201,21 +312,30 @@ def main():
 
         print()
 
+    save_results(results)
+
     print("=== Pruning Sweep Results ===")
     print(
-        f"{'Pruning':>10} "
-        f"{'Sparsity':>10} "
+        f"{'Pruning':>8} "
+        f"{'Sparsity':>9} "
         f"{'Accuracy':>10} "
-        f"{'Change':>10}"
+        f"{'Change':>10} "
+        f"{'Non-zero':>12} "
+        f"{'Latency':>10}"
     )
 
     for result in results:
         print(
-            f"{result['pruning'] * 100:>9.0f}% "
-            f"{result['sparsity'] * 100:>9.2f}% "
+            f"{result['pruning'] * 100:>7.0f}% "
+            f"{result['sparsity'] * 100:>8.2f}% "
             f"{result['accuracy']:>9.2f}% "
-            f"{result['accuracy_change']:>+9.2f} pp"
+            f"{result['accuracy_change']:>+9.2f} pp "
+            f"{result['nonzero_parameters']:>11,} "
+            f"{result['latency_ms']:>9.3f} ms"
         )
+
+    print()
+    print(f"Results saved to {RESULTS_PATH}")
 
 
 if __name__ == "__main__":

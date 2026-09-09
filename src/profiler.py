@@ -11,7 +11,24 @@ MODEL_PATH = PROJECT_ROOT / "models" / "baseline_mlp.pth"
 
 
 def count_parameters(model):
-    return sum(parameter.numel() for parameter in model.parameters())
+    total_parameters = 0
+
+    for module in model.modules():
+        if isinstance(module, torch.nn.Linear):
+            total_parameters += module.weight.numel()
+
+    return total_parameters
+
+def count_nonzero_parameters(model):
+    total_nonzero = 0
+
+    for module in model.modules():
+        if isinstance(module, torch.nn.Linear):
+            total_nonzero += torch.count_nonzero(
+                module.weight
+            ).item()
+
+    return total_nonzero
 
 
 def get_model_size_mb(model_path):
@@ -20,9 +37,12 @@ def get_model_size_mb(model_path):
 
 
 def measure_latency(model, device, iterations=100):
-    input_tensor = torch.randn(1, 784, device=device)
+    input_tensor = torch.randn(
+        1,
+        784,
+        device=device,
+    )
 
-    # Warm up GPU
     with torch.no_grad():
         for _ in range(10):
             model(input_tensor)
@@ -45,18 +65,29 @@ def measure_latency(model, device, iterations=100):
 
 
 def main():
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device(
+        "cuda" if torch.cuda.is_available() else "cpu"
+    )
 
     model = MLP().to(device)
-    model.load_state_dict(torch.load(MODEL_PATH, map_location=device))
+
+    model.load_state_dict(
+        torch.load(
+            MODEL_PATH,
+            map_location=device,
+        )
+    )
+
     model.eval()
 
     total_parameters = count_parameters(model)
+    nonzero_parameters = count_nonzero_parameters(model)
     model_size = get_model_size_mb(MODEL_PATH)
     latency = measure_latency(model, device)
 
-    print(f"Model: MLP")
+    print("Model: MLP")
     print(f"Parameters: {total_parameters:,}")
+    print(f"Non-zero parameters: {nonzero_parameters:,}")
     print(f"Model size: {model_size:.2f} MB")
     print(f"Inference latency: {latency:.3f} ms")
 
