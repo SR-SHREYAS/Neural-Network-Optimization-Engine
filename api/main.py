@@ -1,6 +1,8 @@
 from fastapi import FastAPI
 
 from api.routes.model import get_model_profile
+from api.routes.optimize import router as optimize_router
+
 
 app = FastAPI(
     title="Neural Network Optimization Engine",
@@ -17,3 +19,8 @@ def health_check():
 @app.get("/model/profile")
 def model_profile():
     return get_model_profile()
+
+
+app.include_router(
+    optimize_router,
+)

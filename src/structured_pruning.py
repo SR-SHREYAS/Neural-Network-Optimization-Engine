@@ -1,6 +1,6 @@
 import torch
 
-from model import MLP
+from .model import MLP
 
 
 def _select_neurons(weight, amount):
