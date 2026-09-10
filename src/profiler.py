@@ -11,6 +11,16 @@ MODEL_PATH = PROJECT_ROOT / "models" / "baseline_mlp.pth"
 
 
 def count_parameters(model):
+    """Count all trainable parameters, including weights and biases."""
+    return sum(
+        parameter.numel()
+        for parameter in model.parameters()
+        if parameter.requires_grad
+    )
+
+
+def count_weight_parameters(model):
+    """Count weight parameters in Linear layers."""
     total_parameters = 0
 
     for module in model.modules():
@@ -19,7 +29,9 @@ def count_parameters(model):
 
     return total_parameters
 
+
 def count_nonzero_parameters(model):
+    """Count non-zero weights in Linear layers."""
     total_nonzero = 0
 
     for module in model.modules():
@@ -81,13 +93,15 @@ def main():
     model.eval()
 
     total_parameters = count_parameters(model)
+    weight_parameters = count_weight_parameters(model)
     nonzero_parameters = count_nonzero_parameters(model)
     model_size = get_model_size_mb(MODEL_PATH)
     latency = measure_latency(model, device)
 
     print("Model: MLP")
-    print(f"Parameters: {total_parameters:,}")
-    print(f"Non-zero parameters: {nonzero_parameters:,}")
+    print(f"Total trainable parameters: {total_parameters:,}")
+    print(f"Weight parameters: {weight_parameters:,}")
+    print(f"Non-zero weights: {nonzero_parameters:,}")
     print(f"Model size: {model_size:.2f} MB")
     print(f"Inference latency: {latency:.3f} ms")
 
