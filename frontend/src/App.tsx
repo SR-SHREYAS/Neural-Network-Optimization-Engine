@@ -46,8 +46,8 @@ function formatNumber(value: number) {
   return new Intl.NumberFormat("en-US").format(value);
 }
 
-function formatPercent(value: number) {
-  return `${value.toFixed(2)}%`;
+function formatArchitecture(result: ExperimentResult) {
+  return `784 → ${result.hidden1_size} → ${result.hidden2_size} → 10`;
 }
 
 function App() {
@@ -66,10 +66,9 @@ function App() {
     useState<OptimizationResponse | null>(null);
 
   useEffect(() => {
-    async function loadDashboard() {
+    async function loadData() {
       try {
         setLoading(true);
-        setError(null);
 
         const [healthResponse, profileResponse, resultsResponse] =
           await Promise.all([
@@ -83,16 +82,12 @@ function App() {
         }
 
         if (!profileResponse.ok || !resultsResponse.ok) {
-          throw new Error("Failed to load model data.");
+          throw new Error("Unable to load model information.");
         }
 
-        const profileData: ModelProfile = await profileResponse.json();
-        const resultsData: ExperimentResult[] =
-          await resultsResponse.json();
-
         setHealth(true);
-        setProfile(profileData);
-        setResults(resultsData);
+        setProfile(await profileResponse.json());
+        setResults(await resultsResponse.json());
       } catch (err) {
         setHealth(false);
         setError(
@@ -105,15 +100,15 @@ function App() {
       }
     }
 
-    loadDashboard();
+    loadData();
   }, []);
 
-  const baseline = useMemo(
-    () => results.find((result) => result.pruning === 0),
-    [results],
-  );
-
   const displayedResults = optimization?.results ?? results;
+
+  const baseline = useMemo(
+    () => displayedResults.find((result) => result.pruning === 0),
+    [displayedResults],
+  );
 
   const bestModel =
     optimization?.best_model ??
@@ -125,17 +120,19 @@ function App() {
         null,
       );
 
-  const parameterReduction = profile && bestModel
-    ? ((profile.total_parameters - bestModel.parameters) /
-        profile.total_parameters) *
-      100
-    : 0;
+  const parameterReduction =
+    profile && bestModel
+      ? ((profile.total_parameters - bestModel.parameters) /
+          profile.total_parameters) *
+        100
+      : 0;
 
-  const sizeReduction = profile && bestModel
-    ? ((profile.model_size_mb - bestModel.model_size_mb) /
-        profile.model_size_mb) *
-      100
-    : 0;
+  const sizeReduction =
+    profile && bestModel
+      ? ((profile.model_size_mb - bestModel.model_size_mb) /
+          profile.model_size_mb) *
+        100
+      : 0;
 
   async function runOptimization() {
     try {
@@ -159,7 +156,7 @@ function App() {
       const loss = Number(maxAccuracyLoss);
 
       if (Number.isNaN(loss) || loss < 0) {
-        throw new Error("Maximum accuracy loss must be a non-negative number.");
+        throw new Error("Maximum accuracy loss must be non-negative.");
       }
 
       const response = await fetch(`${API_BASE_URL}/optimize`, {
@@ -190,280 +187,248 @@ function App() {
   }
 
   return (
-    <div className="app-shell">
-      <header className="topbar">
-        <div className="brand">
-          <div className="brand-mark">N</div>
-          <div>
-            <p className="eyebrow">Deep Learning Engine</p>
-            <h1>Neural Network Optimization Engine</h1>
-          </div>
-        </div>
+    <div className="site">
+      <header className="header">
+        <a className="wordmark" href="/">
+          NNOE
+        </a>
 
-        <div className={`api-status ${health ? "online" : "offline"}`}>
-          <span className="status-dot" />
-          {health ? "API Online" : "API Offline"}
+        <div className="header-meta">
+          <span>Neural Network Optimization Engine</span>
+          <span className={`connection ${health ? "online" : ""}`}>
+            <i />
+            {health ? "Connected" : "Disconnected"}
+          </span>
         </div>
       </header>
 
-      <main className="dashboard">
-        <section className="hero-section">
-          <div>
-            <p className="section-kicker">MODEL OPTIMIZATION</p>
-            <h2>Reduce complexity without losing performance.</h2>
-            <p className="hero-description">
-              Profile a trained neural network, evaluate structured pruning
-              levels, fine-tune candidates, and select the most efficient model
-              within your accuracy constraint.
-            </p>
-          </div>
-
-          <div className="hero-badge">
-            <span>ACTIVE MODEL</span>
-            <strong>{profile?.model ?? "MLP"}</strong>
-            <small>{profile?.architecture ?? "784 → 256 → 128 → 10"}</small>
-          </div>
+      <main>
+        <section className="intro">
+          <span className="label">MODEL OPTIMIZATION</span>
+          <h1>
+            Make the network
+            <br />
+            smaller.
+          </h1>
+          <p>
+            An automated pruning engine for finding a lower-complexity neural
+            network while preserving acceptable predictive performance.
+          </p>
         </section>
 
         {error && (
-          <div className="error-banner">
-            <strong>Connection error</strong>
+          <div className="error">
+            <strong>Error</strong>
             <span>{error}</span>
           </div>
         )}
 
-        <section className="metrics-grid">
-          <MetricCard
-            label="Test Accuracy"
-            value={
-              profile && baseline
-                ? formatPercent(baseline.accuracy)
-                : loading
-                  ? "..."
+        <section className="section model-section">
+          <SectionHeading number="01" title="Model" />
+
+          <div className="model-line">
+            <div>
+              <span className="label">ARCHITECTURE</span>
+              <strong className="architecture">
+                {profile?.architecture ?? "784 → 256 → 128 → 10"}
+              </strong>
+            </div>
+
+            <div className="model-device">
+              <span className="label">RUNTIME</span>
+              <strong>{profile?.device ?? "—"}</strong>
+            </div>
+          </div>
+
+          <div className="metrics">
+            <Metric
+              label="Test accuracy"
+              value={baseline ? `${baseline.accuracy.toFixed(2)}%` : "—"}
+            />
+            <Metric
+              label="Parameters"
+              value={
+                profile ? formatNumber(profile.total_parameters) : "—"
+              }
+            />
+            <Metric
+              label="Model size"
+              value={
+                profile ? `${profile.model_size_mb.toFixed(2)} MB` : "—"
+              }
+            />
+            <Metric
+              label="Inference"
+              value={
+                profile
+                  ? `${profile.inference_latency_ms.toFixed(3)} ms`
                   : "—"
-            }
-            detail="Baseline model"
-          />
-          <MetricCard
-            label="Parameters"
-            value={
-              profile ? formatNumber(profile.total_parameters) : "—"
-            }
-            detail="Trainable parameters"
-          />
-          <MetricCard
-            label="Model Size"
-            value={
-              profile ? `${profile.model_size_mb.toFixed(2)} MB` : "—"
-            }
-            detail="Baseline checkpoint"
-          />
-          <MetricCard
-            label="Inference"
-            value={
-              profile
-                ? `${profile.inference_latency_ms.toFixed(3)} ms`
-                : "—"
-            }
-            detail={profile?.device ?? "Runtime device"}
-          />
+              }
+            />
+          </div>
         </section>
 
-        <section className="content-grid">
-          <div className="panel optimization-panel">
-            <div className="panel-heading">
-              <div>
-                <p className="section-kicker">OPTIMIZATION</p>
-                <h3>Configure pruning sweep</h3>
+        <section className="section optimize-section">
+          <SectionHeading number="02" title="Optimize" />
+
+          <div className="controls">
+            <div className="control">
+              <label htmlFor="levels">Pruning levels</label>
+              <div className="input-row">
+                <input
+                  id="levels"
+                  value={pruningLevels}
+                  onChange={(event) =>
+                    setPruningLevels(event.target.value)
+                  }
+                />
+                <span>%</span>
               </div>
-              <span className="panel-tag">STRUCTURED</span>
+              <small>Comma-separated. Each level is evaluated independently.</small>
             </div>
 
-            <div className="form-group">
-              <label htmlFor="pruning-levels">Pruning levels (%)</label>
-              <input
-                id="pruning-levels"
-                value={pruningLevels}
-                onChange={(event) => setPruningLevels(event.target.value)}
-                placeholder="10, 20, 30, 40, 50"
-              />
-              <span className="input-hint">
-                Comma-separated percentages to evaluate independently.
-              </span>
+            <div className="control">
+              <label htmlFor="loss">Maximum accuracy loss</label>
+              <div className="input-row">
+                <input
+                  id="loss"
+                  type="number"
+                  min="0"
+                  step="0.05"
+                  value={maxAccuracyLoss}
+                  onChange={(event) =>
+                    setMaxAccuracyLoss(event.target.value)
+                  }
+                />
+                <span>pp</span>
+              </div>
+              <small>
+                Candidates exceeding this loss are rejected.
+              </small>
             </div>
+          </div>
 
-            <div className="form-group">
-              <label htmlFor="accuracy-loss">
-                Maximum accuracy loss (percentage points)
-              </label>
-              <input
-                id="accuracy-loss"
-                type="number"
-                min="0"
-                step="0.05"
-                value={maxAccuracyLoss}
-                onChange={(event) =>
-                  setMaxAccuracyLoss(event.target.value)
-                }
-              />
-              <span className="input-hint">
-                Candidates beyond this threshold are rejected.
-              </span>
-            </div>
-
+          <div className="action-row">
             <button
-              className="optimize-button"
+              className="run-button"
               onClick={runOptimization}
               disabled={optimizing || loading}
             >
-              {optimizing ? (
-                <>
-                  <span className="spinner" />
-                  Running optimization...
-                </>
-              ) : (
-                <>
-                  Run optimization
-                  <span>→</span>
-                </>
-              )}
+              {optimizing ? "Optimizing..." : "Run optimization"}
+              <span>↗</span>
             </button>
 
-            <p className="runtime-note">
-              Runs the real PyTorch pruning and fine-tuning pipeline on the
-              configured backend.
-            </p>
-          </div>
-
-          <div className="panel best-panel">
-            <div className="panel-heading">
-              <div>
-                <p className="section-kicker">SELECTED CANDIDATE</p>
-                <h3>Best optimized model</h3>
-              </div>
-              {bestModel && <span className="best-check">BEST</span>}
-            </div>
-
-            {bestModel ? (
-              <>
-                <div className="architecture">
-                  <span>784</span>
-                  <i />
-                  <span>{bestModel.hidden1_size}</span>
-                  <i />
-                  <span>{bestModel.hidden2_size}</span>
-                  <i />
-                  <span>10</span>
-                </div>
-
-                <div className="best-stat-grid">
-                  <Stat
-                    label="Pruning"
-                    value={formatPercent(bestModel.pruning * 100)}
-                  />
-                  <Stat
-                    label="Accuracy"
-                    value={formatPercent(bestModel.accuracy)}
-                  />
-                  <Stat
-                    label="Parameters"
-                    value={formatNumber(bestModel.parameters)}
-                  />
-                  <Stat
-                    label="Size"
-                    value={`${bestModel.model_size_mb.toFixed(3)} MB`}
-                  />
-                </div>
-
-                <div className="comparison">
-                  <div>
-                    <span>Parameter reduction</span>
-                    <strong>{parameterReduction.toFixed(1)}%</strong>
-                  </div>
-                  <div>
-                    <span>Size reduction</span>
-                    <strong>{sizeReduction.toFixed(1)}%</strong>
-                  </div>
-                  <div>
-                    <span>Accuracy change</span>
-                    <strong
-                      className={
-                        bestModel.accuracy_change < 0
-                          ? "negative"
-                          : "positive"
-                      }
-                    >
-                      {bestModel.accuracy_change >= 0 ? "+" : ""}
-                      {bestModel.accuracy_change.toFixed(2)} pp
-                    </strong>
-                  </div>
-                </div>
-
-                <a
-                  className="download-button"
-                  href={`${API_BASE_URL}/model/optimized`}
-                  download="optimized_mlp.pth"
-                >
-                  Download optimized model
-                  <span>↓</span>
-                </a>
-              </>
-            ) : (
-              <div className="empty-state">
-                <span className="empty-icon">◎</span>
-                <p>Run an optimization sweep to select a model.</p>
-              </div>
-            )}
+            <span className="action-note">
+              Structured pruning · fine-tuning · evaluation
+            </span>
           </div>
         </section>
 
-        <section className="panel results-panel">
-          <div className="panel-heading">
-            <div>
-              <p className="section-kicker">EXPERIMENT RESULTS</p>
-              <h3>Performance vs. complexity</h3>
-            </div>
-            <span className="result-count">
-              {displayedResults.length} candidates
-            </span>
-          </div>
+        <section className="section result-section">
+          <SectionHeading number="03" title="Result" />
 
-          <div className="table-wrapper">
+          {bestModel ? (
+            <div className="result">
+              <div className="result-main">
+                <span className="label">SELECTED MODEL</span>
+                <div className="result-pruning">
+                  {Math.round(bestModel.pruning * 100)}%
+                </div>
+                <span className="result-caption">pruning</span>
+              </div>
+
+              <div className="result-architecture">
+                <span className="label">ARCHITECTURE</span>
+                <strong>{formatArchitecture(bestModel)}</strong>
+              </div>
+
+              <div className="result-stats">
+                <Metric
+                  label="Accuracy"
+                  value={`${bestModel.accuracy.toFixed(2)}%`}
+                />
+                <Metric
+                  label="Parameters"
+                  value={formatNumber(bestModel.parameters)}
+                />
+                <Metric
+                  label="Size"
+                  value={`${bestModel.model_size_mb.toFixed(2)} MB`}
+                />
+                <Metric
+                  label="Accuracy change"
+                  value={`${bestModel.accuracy_change >= 0 ? "+" : ""}${bestModel.accuracy_change.toFixed(2)} pp`}
+                />
+              </div>
+
+              <div className="result-reduction">
+                <div>
+                  <span>Parameter reduction</span>
+                  <strong>−{parameterReduction.toFixed(1)}%</strong>
+                </div>
+                <div>
+                  <span>Size reduction</span>
+                  <strong>−{sizeReduction.toFixed(1)}%</strong>
+                </div>
+              </div>
+
+              <a
+                className="download"
+                href={`${API_BASE_URL}/model/optimized`}
+                download="optimized_mlp.pth"
+              >
+                Download optimized model
+                <span>↓</span>
+              </a>
+            </div>
+          ) : (
+            <div className="no-result">
+              <span>No optimized model selected.</span>
+              <span>Run an optimization sweep above.</span>
+            </div>
+          )}
+        </section>
+
+        <section className="section experiment-section">
+          <SectionHeading number="04" title="Experiment" />
+
+          <div className="table-scroll">
             <table>
               <thead>
                 <tr>
                   <th>Pruning</th>
                   <th>Architecture</th>
                   <th>Parameters</th>
-                  <th>Model Size</th>
+                  <th>Size</th>
                   <th>Accuracy</th>
                   <th>Δ Accuracy</th>
                   <th>Latency</th>
                 </tr>
               </thead>
+
               <tbody>
                 {displayedResults.map((result) => {
-                  const isBest =
+                  const selected =
                     bestModel &&
                     result.pruning === bestModel.pruning &&
                     result.parameters === bestModel.parameters;
 
                   return (
-                    <tr key={`${result.pruning}-${result.parameters}`}>
+                    <tr
+                      key={`${result.pruning}-${result.parameters}`}
+                      className={selected ? "selected-row" : ""}
+                    >
                       <td>
-                        <span className={isBest ? "best-row-label" : ""}>
-                          {result.pruning === 0
-                            ? "Baseline"
-                            : formatPercent(result.pruning * 100)}
-                        </span>
+                        {result.pruning === 0
+                          ? "Baseline"
+                          : `${Math.round(result.pruning * 100)}%`}
                       </td>
-                      <td className="architecture-cell">
-                        784 → {result.hidden1_size} →{" "}
-                        {result.hidden2_size} → 10
+                      <td className="mono">
+                        {formatArchitecture(result)}
                       </td>
                       <td>{formatNumber(result.parameters)}</td>
                       <td>{result.model_size_mb.toFixed(3)} MB</td>
-                      <td>{formatPercent(result.accuracy)}</td>
+                      <td>{result.accuracy.toFixed(2)}%</td>
                       <td
                         className={
                           result.accuracy_change < 0
@@ -482,121 +447,42 @@ function App() {
             </table>
           </div>
         </section>
-
-        <section className="charts-grid">
-          <ChartPanel
-            title="Accuracy"
-            subtitle="Test accuracy across pruning levels"
-            results={displayedResults}
-            valueKey="accuracy"
-            unit="%"
-          />
-          <ChartPanel
-            title="Parameters"
-            subtitle="Trainable parameter count"
-            results={displayedResults}
-            valueKey="parameters"
-            unit=""
-          />
-        </section>
       </main>
 
       <footer>
-        <span>Neural Network Optimization Engine</span>
-        <span>PyTorch · FastAPI · React + TypeScript</span>
+        <span>NNOE</span>
+        <span>PyTorch · FastAPI · React</span>
       </footer>
     </div>
   );
 }
 
-function MetricCard({
+function SectionHeading({
+  number,
+  title,
+}: {
+  number: string;
+  title: string;
+}) {
+  return (
+    <div className="section-heading">
+      <span>{number}</span>
+      <h2>{title}</h2>
+    </div>
+  );
+}
+
+function Metric({
   label,
   value,
-  detail,
 }: {
   label: string;
   value: string;
-  detail: string;
 }) {
   return (
-    <div className="metric-card">
-      <span className="metric-label">{label}</span>
-      <strong>{value}</strong>
-      <span className="metric-detail">{detail}</span>
-    </div>
-  );
-}
-
-function Stat({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="stat">
+    <div className="metric">
       <span>{label}</span>
       <strong>{value}</strong>
-    </div>
-  );
-}
-
-function ChartPanel({
-  title,
-  subtitle,
-  results,
-  valueKey,
-  unit,
-}: {
-  title: string;
-  subtitle: string;
-  results: ExperimentResult[];
-  valueKey: "accuracy" | "parameters";
-  unit: string;
-}) {
-  const values = results.map((result) => result[valueKey]);
-  const max = Math.max(...values);
-  const min = Math.min(...values);
-  const range = max - min || 1;
-
-  return (
-    <div className="panel chart-panel">
-      <div className="panel-heading">
-        <div>
-          <p className="section-kicker">TREND</p>
-          <h3>{title}</h3>
-          <span className="chart-subtitle">{subtitle}</span>
-        </div>
-      </div>
-
-      <div className="chart">
-        {results.map((result) => {
-          const value = result[valueKey];
-          const height =
-            valueKey === "accuracy"
-              ? 35 + ((value - min) / range) * 65
-              : 35 + ((max - value) / range) * 65;
-
-          return (
-            <div
-              className="chart-column"
-              key={`${valueKey}-${result.pruning}`}
-            >
-              <span className="chart-value">
-                {valueKey === "parameters"
-                  ? `${(value / 1000).toFixed(0)}k`
-                  : `${value.toFixed(2)}${unit}`}
-              </span>
-              <div className="bar-track">
-                <div
-                  className="bar"
-                  style={{ height: `${height}%` }}
-                />
-              </div>
-              <span className="chart-label">
-                {result.pruning === 0
-                  ? "Base"
-                  : `${Math.round(result.pruning * 100)}%`}
-              </span>
-            </div>
-          );
-        })}
-      </div>
     </div>
   );
 }
