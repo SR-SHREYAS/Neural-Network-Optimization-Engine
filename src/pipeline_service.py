@@ -211,6 +211,25 @@ def finetune():
 
     for candidate in STATE.pruned_candidates:
         model = candidate["model"]
+        fine_tuning_history = []
+
+        def on_fine_tune_progress(
+            stage,
+            candidate_index,
+            total_candidates,
+            epoch,
+            total_epochs,
+            accuracy,
+            loss,
+        ):
+            fine_tuning_history.append(
+                {
+                    "epoch": int(epoch),
+                    "total_epochs": int(total_epochs),
+                    "accuracy": float(accuracy),
+                    "loss": float(loss),
+                }
+            )
 
         fine_tune(
             model,
@@ -218,6 +237,9 @@ def finetune():
             STATE.device,
             epochs=FINE_TUNE_EPOCHS,
             learning_rate=FINE_TUNE_LEARNING_RATE,
+            progress_callback=on_fine_tune_progress,
+            candidate_index=len(finetuned) + 1,
+            candidate_total=len(STATE.pruned_candidates),
         )
 
         model.eval()
@@ -226,6 +248,7 @@ def finetune():
             {
                 **candidate,
                 "model": model,
+                "fine_tuning_history": fine_tuning_history,
             }
         )
 

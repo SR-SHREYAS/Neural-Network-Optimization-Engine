@@ -5,7 +5,10 @@ from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 
 from .model import MLP
-from .structured_pruning import structured_prune
+from .structured_pruning import (
+    describe_layer_pruning,
+    structured_prune,
+)
 from .finetune import fine_tune
 from .profiler import (
     count_parameters,
@@ -53,6 +56,9 @@ BATCH_SIZE = 128
 
 FINE_TUNE_EPOCHS = 2
 FINE_TUNE_LEARNING_RATE = 0.0001
+
+_ANALYSIS_CACHE = {}
+_ANALYSIS_DATA_CACHE = None
 
 
 def _load_baseline(device):
@@ -302,6 +308,8 @@ def optimize_model(
                 ),
             )
 
+        fine_tuning_history = []
+
         def on_fine_tune_progress(
             stage,
             candidate,
@@ -311,6 +319,15 @@ def optimize_model(
             accuracy,
             loss,
         ):
+            fine_tuning_history.append(
+                {
+                    "epoch": int(epoch),
+                    "total_epochs": int(total_epochs),
+                    "accuracy": float(accuracy),
+                    "loss": float(loss),
+                }
+            )
+
             if progress_callback is not None:
                 progress_callback(
                     stage=stage,
@@ -396,6 +413,8 @@ def optimize_model(
             ],
             "before_finetuning_accuracy":
                 before_accuracy,
+            "fine_tuning_history":
+                fine_tuning_history,
         }
 
         results.append(
@@ -502,3 +521,160 @@ def optimize_model(
         "optimized_model_path":
             str(OPTIMIZED_MODEL_PATH),
     }
+
+def _load_analysis_data():
+    """Load MNIST loaders once for read-only analysis endpoints."""
+    global _ANALYSIS_DATA_CACHE
+
+    if _ANALYSIS_DATA_CACHE is None:
+        _ANALYSIS_DATA_CACHE = _load_data()
+
+    return _ANALYSIS_DATA_CACHE
+
+
+def _checkpoint_signature():
+    if not MODEL_PATH.exists():
+        return None
+    return int(MODEL_PATH.stat().st_mtime_ns)
+
+
+def _analysis_cache_key(level):
+    return (
+        "baseline" if level is None else round(float(level), 6),
+        _checkpoint_signature(),
+    )
+
+
+def _baseline_metrics(model, device):
+    return {
+        "architecture": [
+            int(model.network[0].in_features),
+            int(model.network[0].out_features),
+            int(model.network[2].out_features),
+            int(model.network[4].out_features),
+        ],
+        "parameters": int(count_parameters(model)),
+        "weight_parameters": int(count_weight_parameters(model)),
+        "nonzero_parameters": int(count_nonzero_parameters(model)),
+        "model_size_mb": float(_get_model_size_mb(model)),
+        "checkpoint_size_mb": (
+            float(MODEL_PATH.stat().st_size / (1024 ** 2))
+            if MODEL_PATH.exists()
+            else None
+        ),
+        "latency_ms": float(measure_latency(model, device)),
+    }
+
+
+def analyze_model(level=None):
+    """
+    Return measured baseline metrics and, optionally, a read-only analysis of
+    one structured-pruning level before any fine-tuning.
+
+    This endpoint deliberately does not modify the optimized checkpoint or the
+    stored CSV. It is the evidence source for the educational frontend.
+    """
+    if level is not None:
+        level = float(level)
+        if not 0.0 <= level < 1.0:
+            raise ValueError("level must be between 0.0 and 1.0")
+
+    cache_key = _analysis_cache_key(level)
+    if cache_key in _ANALYSIS_CACHE:
+        return _ANALYSIS_CACHE[cache_key]
+
+    if not MODEL_PATH.exists():
+        raise FileNotFoundError("Baseline model checkpoint is not available.")
+
+    device = torch.device(
+        "cuda" if torch.cuda.is_available() else "cpu"
+    )
+
+    baseline_model = _load_baseline(device)
+    _, test_loader = _load_analysis_data()
+
+    baseline_accuracy = _evaluate(
+        baseline_model,
+        test_loader,
+        device,
+        progress_callback=None,
+    )
+    baseline = _baseline_metrics(baseline_model, device)
+    baseline["test_accuracy"] = float(baseline_accuracy)
+
+    response = {
+        "level": level,
+        "device": str(device),
+        "baseline_accuracy": float(baseline_accuracy),
+        "baseline": baseline,
+        "pruned": None,
+        "layers": [],
+        "importance_method": (
+            "I_j = sum_i |W_ji|, computed as weight.abs().sum(dim=1) "
+            "on each hidden Linear layer. This sums the absolute incoming "
+            "weights for each output neuron."
+        ),
+        "retention_rule": (
+            "keep_count = max(1, round(n * (1 - level))); the top keep_count "
+            "neurons by importance are retained and returned in original order."
+        ),
+        "note": (
+            "The before-fine-tuning accuracy is measured on the held-out MNIST "
+            "test set immediately after structured pruning, before any weight "
+            "updates. It is not the final selected-model accuracy."
+        ),
+    }
+
+    if level is None:
+        _ANALYSIS_CACHE[cache_key] = response
+        return response
+
+    pruned_model = structured_prune(baseline_model, level)
+    pruned_model.eval()
+
+    before_accuracy = _evaluate(
+        pruned_model,
+        test_loader,
+        device,
+        progress_callback=None,
+    )
+    pruned_metrics = _model_metrics(pruned_model, device)
+
+    first_layer = baseline_model.network[0]
+    second_layer = baseline_model.network[2]
+
+    first_info = describe_layer_pruning(
+        first_layer.weight,
+        level,
+        bias=first_layer.bias,
+    )
+    second_info = describe_layer_pruning(
+        second_layer.weight,
+        level,
+        bias=second_layer.bias,
+    )
+
+    response["pruned"] = {
+        "architecture": [
+            784,
+            int(pruned_model.network[0].out_features),
+            int(pruned_model.network[2].out_features),
+            10,
+        ],
+        "parameters": int(pruned_metrics["parameters"]),
+        "weight_parameters": int(pruned_metrics["weight_parameters"]),
+        "nonzero_parameters": int(pruned_metrics["nonzero_parameters"]),
+        "model_size_mb": float(pruned_metrics["model_size_mb"]),
+        "latency_ms": float(pruned_metrics["latency_ms"]),
+        "before_finetuning_accuracy": float(before_accuracy),
+        "accuracy_change_before_finetuning": float(
+            before_accuracy - baseline_accuracy
+        ),
+    }
+    response["layers"] = [
+        {"name": "Hidden 1", **first_info},
+        {"name": "Hidden 2", **second_info},
+    ]
+
+    _ANALYSIS_CACHE[cache_key] = response
+    return response

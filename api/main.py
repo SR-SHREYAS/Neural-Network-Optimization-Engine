@@ -8,6 +8,7 @@ from api.routes.model import (
 from api.routes.optimize import router as optimize_router
 from api.routes.results import router as results_router
 from api.routes.pipeline import router as pipeline_router
+from api.routes.weights import router as weights_router
 
 app = FastAPI(
     title="Neural Network Optimization Engine",
@@ -45,3 +46,4 @@ app.include_router(model_router)
 app.include_router(optimize_router)
 app.include_router(results_router)
 app.include_router(pipeline_router)
+app.include_router(weights_router)
