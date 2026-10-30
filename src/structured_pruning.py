@@ -3,20 +3,108 @@ import torch
 from .model import MLP
 
 
-def _select_neurons(weight, amount):
+def neuron_importance(weight):
     """
-    Select the neurons with the largest outgoing L1 weight magnitude.
+    Score each output neuron by the L1 magnitude of its incoming weights.
+
+    ``weight`` has shape ``(out_features, in_features)``. Summing over
+    ``dim=1`` adds the absolute values of the weights that arrive at each
+    output neuron from the previous layer.
+
+    This is a heuristic, not a causal measure of a neuron's contribution.
+    """
+    return weight.abs().sum(dim=1)
+
+
+def select_neurons(weight, amount):
+    """
+    Select the neurons with the largest incoming L1 weight magnitude.
 
     Returns:
-        indices of neurons to keep, sorted by importance.
+        keep_indices: sorted indices of the neurons to retain.
+        importance: the importance score for every original neuron.
+        keep_count: the number of neurons retained.
     """
     num_neurons = weight.shape[0]
     keep_count = max(1, int(round(num_neurons * (1.0 - amount))))
 
-    importance = weight.abs().sum(dim=1)
+    importance = neuron_importance(weight)
     _, indices = torch.topk(importance, keep_count)
 
-    return indices.sort().values
+    return indices.sort().values, importance, keep_count
+
+
+def describe_layer_pruning(weight, amount, bias=None, top_weights=6):
+    """
+    Build a JSON-friendly description of the neuron selection for one layer.
+
+    The returned values come directly from the checkpoint weight matrix:
+    importance scores, retained/removed indices, and a small worked example
+    of the incoming weights for the cutoff neurons.
+    """
+    keep, importance, keep_count = select_neurons(weight, amount)
+    keep_list = [int(index) for index in keep.detach().cpu().tolist()]
+    keep_set = set(keep_list)
+    removed_list = [
+        index for index in range(int(weight.shape[0])) if index not in keep_set
+    ]
+
+    importance_list = [float(value) for value in importance.detach().cpu().tolist()]
+    bias_values = (
+        [float(value) for value in bias.detach().cpu().tolist()]
+        if bias is not None
+        else None
+    )
+
+    def _neuron_example(index):
+        row = weight[index].detach().cpu()
+        source_count = int(row.numel())
+        sample_count = min(top_weights, source_count)
+        top = torch.topk(row.abs(), sample_count)
+        source_indices = [int(value) for value in top.indices.tolist()]
+        return {
+            "index": int(index),
+            "importance": float(importance_list[index]),
+            "bias": (
+                float(bias_values[index])
+                if bias_values is not None
+                else None
+            ),
+            "top_weights": [
+                {
+                    "source_index": source_index,
+                    "weight": float(row[source_index].item()),
+                }
+                for source_index in source_indices
+            ],
+        }
+
+    lowest_retained = None
+    if keep_list:
+        lowest_index = min(keep_list, key=lambda index: importance_list[index])
+        lowest_retained = _neuron_example(lowest_index)
+
+    highest_removed = None
+    if removed_list:
+        highest_index = max(removed_list, key=lambda index: importance_list[index])
+        highest_removed = _neuron_example(highest_index)
+
+    return {
+        "original_size": int(weight.shape[0]),
+        "keep_count": int(keep_count),
+        "removed_count": len(removed_list),
+        "kept_indices": keep_list,
+        "removed_indices": removed_list,
+        "importance": importance_list,
+        "lowest_retained": lowest_retained,
+        "highest_removed": highest_removed,
+    }
+
+
+def _select_neurons(weight, amount):
+    """Backward-compatible wrapper returning only the retained indices."""
+    keep, _, _ = select_neurons(weight, amount)
+    return keep
 
 
 def structured_prune(model, amount):
